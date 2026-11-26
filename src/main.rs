@@ -54,46 +54,6 @@ fn main() {
         cron_secret,
     });
 
-    // 定时签到：5 段北京时间表达式补 0 秒后注册（星期字段按标准 cron 语义转换）。
-    if !cron_expr.is_empty() {
-        let fields: Vec<&str> = cron_expr.split_whitespace().collect();
-        let expr6 = if fields.len() == 5 {
-            format!(
-                "0 {} {} {} {} {}",
-                fields[0],
-                fields[1],
-                fields[2],
-                fields[3],
-                convert_dow(fields[4])
-            )
-        } else {
-            cron_expr.clone()
-        };
-        let schedule = cron::Schedule::from_str(&expr6).unwrap_or_else(|e| {
-            log::error!("cron 表达式无效: {}", e);
-            std::process::exit(1);
-        });
-        let st2 = state.clone();
-        tokio::spawn(async move {
-            let bj = FixedOffset::east_opt(8 * 3600).expect("CST");
-            loop {
-                let now = chrono::Utc::now().with_timezone(&bj);
-                if let Some(next) = schedule.upcoming(bj).next() {
-                    let wait = (next - now).to_std().unwrap_or(Duration::from_secs(1));
-                    tokio::time::sleep(wait).await;
-                    log::info!("[cron] 开始定时签到 {}", util::bj_string(now_ms()));
-                    let res = run_all(&st2, false).await;
-                    log::info!("[cron] 完成: {}", res);
-                    // 避免同一秒内重复触发
-                    tokio::time::sleep(Duration::from_millis(1100)).await;
-                } else {
-                    tokio::time::sleep(Duration::from_secs(60)).await;
-                }
-            }
-        });
-        log::info!("定时签到已启用（北京时间）: {}", cron_expr);
-    }
-
     let app = build_router(state.clone());
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -101,6 +61,47 @@ fn main() {
         .build()
         .expect("构建 tokio 运行时失败");
     runtime.block_on(async move {
+        // 定时签到：5 段北京时间表达式补 0 秒后注册（星期字段按标准 cron 语义转换）。
+        // 注意：tokio::spawn 必须在 runtime 上下文内调用，因此整段逻辑放进 block_on。
+        if !cron_expr.is_empty() {
+            let fields: Vec<&str> = cron_expr.split_whitespace().collect();
+            let expr6 = if fields.len() == 5 {
+                format!(
+                    "0 {} {} {} {} {}",
+                    fields[0],
+                    fields[1],
+                    fields[2],
+                    fields[3],
+                    convert_dow(fields[4])
+                )
+            } else {
+                cron_expr.clone()
+            };
+            let schedule = cron::Schedule::from_str(&expr6).unwrap_or_else(|e| {
+                log::error!("cron 表达式无效: {}", e);
+                std::process::exit(1);
+            });
+            let st2 = state.clone();
+            tokio::spawn(async move {
+                let bj = FixedOffset::east_opt(8 * 3600).expect("CST");
+                loop {
+                    let now = chrono::Utc::now().with_timezone(&bj);
+                    if let Some(next) = schedule.upcoming(bj).next() {
+                        let wait = (next - now).to_std().unwrap_or(Duration::from_secs(1));
+                        tokio::time::sleep(wait).await;
+                        log::info!("[cron] 开始定时签到 {}", util::bj_string(now_ms()));
+                        let res = run_all(&st2, false).await;
+                        log::info!("[cron] 完成: {}", res);
+                        // 避免同一秒内重复触发
+                        tokio::time::sleep(Duration::from_millis(1100)).await;
+                    } else {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                    }
+                }
+            });
+            log::info!("定时签到已启用（北京时间）: {}", cron_expr);
+        }
+
         log::info!(
             "签到控制台已启动: http://0.0.0.0:{}  （数据文件 {}）",
             port,
